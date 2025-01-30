@@ -1,0 +1,11 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Flutter iOS",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "9BB09AA0-AD45-4D99-81EF-43F18EC38195" // iPhone 16 Pro Max
+        }
+    ]
+} 

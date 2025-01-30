@@ -1,46 +1,55 @@
 import 'package:flutter/material.dart';
-import 'dart:html' as html;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import '../painters/grid_painter.dart';
 
 // 配置管理器
 class ConfigManager {
-  static final ConfigManager _instance = ConfigManager._internal();
-  factory ConfigManager() => _instance;
-  
-  ConfigManager._internal() {
-    _loadConfig();
+  static Future<ConfigManager> getInstance() async {
+    if (_instance == null) {
+      _instance = ConfigManager._internal();
+      await _instance!._loadConfig();
+    }
+    return _instance!;
   }
+
+  static ConfigManager? _instance;
+
+  // 私有构造函数
+  ConfigManager._internal();
 
   // 默认配置
   static const Map<String, dynamic> _defaultConfig = {
-    'comfyuiAddress': '10.147.18.158:8080/api',
+    'comfyuiAddress': '114.55.173.20:8090/api',
   };
 
   // 当前配置
   Map<String, dynamic> _currentConfig = Map.from(_defaultConfig);
-  
+
   // 临时配置（未保存）
   Map<String, dynamic> _tempConfig = {};
 
   // 从 localStorage 加载配置
-  void _loadConfig() {
-    final String? savedConfig = html.window.localStorage['appConfig'];
-    if (savedConfig != null) {
-      try {
+  Future<void> _loadConfig() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? savedConfig = prefs.getString('appConfig');
+      if (savedConfig != null) {
         final Map<String, dynamic> loadedConfig = json.decode(savedConfig);
         _currentConfig = Map.from(_defaultConfig)..addAll(loadedConfig);
-      } catch (e) {
-        print('加载配置失败: $e');
       }
+      _tempConfig = Map.from(_currentConfig);
+    } catch (e) {
+      print('加载配置失败: $e');
+      _tempConfig = Map.from(_defaultConfig);
     }
-    _tempConfig = Map.from(_currentConfig);
   }
 
   // 保存配置到 localStorage
   Future<void> saveConfig() async {
     _currentConfig = Map.from(_tempConfig);
-    html.window.localStorage['appConfig'] = json.encode(_currentConfig);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('appConfig', json.encode(_currentConfig));
   }
 
   // 重置配置
@@ -55,7 +64,7 @@ class ConfigManager {
 
   // 获取配置值
   String get comfyuiAddress => _currentConfig['comfyuiAddress'] as String;
-  
+
   // 获取临时配置值
   String get tempComfyuiAddress => _tempConfig['comfyuiAddress'] as String;
 }
@@ -68,19 +77,29 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  final ConfigManager _configManager = ConfigManager();
+  late ConfigManager _configManager;
   final TextEditingController _addressController = TextEditingController();
   bool _hasChanges = false;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _addressController.text = _configManager.tempComfyuiAddress;
+    _initializeConfig();
+  }
+
+  Future<void> _initializeConfig() async {
+    _configManager = await ConfigManager.getInstance();
+    setState(() {
+      _addressController.text = _configManager.tempComfyuiAddress;
+      _isLoading = false;
+    });
     _addressController.addListener(_checkChanges);
   }
 
   void _checkChanges() {
-    final bool hasChanges = _addressController.text != _configManager.comfyuiAddress;
+    final bool hasChanges =
+        _addressController.text != _configManager.comfyuiAddress;
     if (hasChanges != _hasChanges) {
       setState(() {
         _hasChanges = hasChanges;
@@ -110,6 +129,13 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(

@@ -2,8 +2,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import '../painters/grid_painter.dart';
-import 'dart:html' as html;
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
 
 // 预设项数据模型
 class PresetItem {
@@ -19,17 +24,17 @@ class PresetItem {
 
   // 转换为 JSON
   Map<String, dynamic> toJson() => {
-    'name': name,
-    'isEnabled': isEnabled,
-    'tags': tags,
-  };
+        'name': name,
+        'isEnabled': isEnabled,
+        'tags': tags,
+      };
 
   // 从 JSON 创建实例
   factory PresetItem.fromJson(Map<String, dynamic> json) => PresetItem(
-    name: json['name'] as String,
-    isEnabled: json['isEnabled'] as bool,
-    tags: List<String>.from(json['tags'] as List),
-  );
+        name: json['name'] as String,
+        isEnabled: json['isEnabled'] as bool,
+        tags: List<String>.from(json['tags'] as List),
+      );
 }
 
 class PresetPage extends StatefulWidget {
@@ -41,7 +46,7 @@ class PresetPage extends StatefulWidget {
 
 class _PresetPageState extends State<PresetPage> {
   final List<PresetItem> _presets = [];
-  
+
   @override
   void initState() {
     super.initState();
@@ -51,32 +56,34 @@ class _PresetPageState extends State<PresetPage> {
   // 加载预设数据
   Future<void> _loadPresets() async {
     try {
-      // 首先尝试从 localStorage 加载
-      final String? jsonString = html.window.localStorage['prompts'];
+      final prefs = await SharedPreferences.getInstance();
+      final String? jsonString = prefs.getString('prompts');
       if (jsonString != null) {
         final List<dynamic> jsonList = json.decode(jsonString) as List;
         setState(() {
           _presets.clear();
           _presets.addAll(
-            jsonList.map((item) => PresetItem.fromJson(item as Map<String, dynamic>)),
+            jsonList.map(
+                (item) => PresetItem.fromJson(item as Map<String, dynamic>)),
           );
         });
       } else {
-        // 如果 localStorage 中没有数据，则加载默认的空列表
-        final String defaultJson = await rootBundle.loadString('assets/prompts.json');
+        // 如果 SharedPreferences 中没有数据，则加载默认的预设
+        final String defaultJson =
+            await rootBundle.loadString('assets/prompts.json');
         final List<dynamic> jsonList = json.decode(defaultJson) as List;
         setState(() {
           _presets.clear();
           _presets.addAll(
-            jsonList.map((item) => PresetItem.fromJson(item as Map<String, dynamic>)),
+            jsonList.map(
+                (item) => PresetItem.fromJson(item as Map<String, dynamic>)),
           );
         });
-        // 保存到 localStorage
+        // 保存到 SharedPreferences
         _savePresets();
       }
     } catch (e) {
       print('加载预设失败: $e');
-      // 如果出现错误，确保至少有一个空列表
       _presets.clear();
       _savePresets();
     }
@@ -87,7 +94,8 @@ class _PresetPageState extends State<PresetPage> {
     try {
       final jsonList = _presets.map((preset) => preset.toJson()).toList();
       final jsonString = json.encode(jsonList);
-      html.window.localStorage['prompts'] = jsonString;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('prompts', jsonString);
     } catch (e) {
       print('保存预设失败: $e');
     }
@@ -118,6 +126,76 @@ class _PresetPageState extends State<PresetPage> {
       _presets.removeAt(index);
       _savePresets();
     });
+  }
+
+  // 修改导出功能
+  Future<void> _exportPresets() async {
+    try {
+      final jsonList = _presets.map((preset) => preset.toJson()).toList();
+      final jsonString = json.encode(jsonList);
+
+      // 创建临时文件
+      final directory = await getTemporaryDirectory();
+      final file = File('${directory.path}/prompts_export.json');
+      await file.writeAsString(jsonString);
+
+      // 使用 share_plus 来分享文件
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: '导出预设',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出失败: $e')),
+        );
+      }
+    }
+  }
+
+  // 修改导入功能
+  Future<void> _importPresets() async {
+    try {
+      // 使用 FilePicker 选择 JSON 文件
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+
+      if (result != null) {
+        final file = File(result.files.single.path!);
+        final contents = await file.readAsString();
+
+        try {
+          final List<dynamic> jsonList = json.decode(contents) as List;
+          setState(() {
+            _presets.clear();
+            _presets.addAll(
+              jsonList.map(
+                  (item) => PresetItem.fromJson(item as Map<String, dynamic>)),
+            );
+          });
+          await _savePresets();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('导入成功')),
+            );
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('导入失败：无效的文件格式')),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入失败: $e')),
+        );
+      }
+    }
   }
 
   @override
@@ -151,61 +229,48 @@ class _PresetPageState extends State<PresetPage> {
           ),
         ),
         actions: [
-          // 导出按钮
-          IconButton(
-            icon: const Icon(Icons.file_download_outlined, color: Colors.deepPurple),
-            onPressed: () {
-              final jsonList = _presets.map((preset) => preset.toJson()).toList();
-              final jsonString = json.encode(jsonList);
-              final bytes = utf8.encode(jsonString);
-              final blob = html.Blob([bytes]);
-              final url = html.Url.createObjectUrlFromBlob(blob);
-              final anchor = html.AnchorElement(href: url)
-                ..setAttribute('download', 'prompts_export.json')
-                ..click();
-              html.Url.revokeObjectUrl(url);
-            },
-            tooltip: '导出预设',
+          // 将按钮包装在 Wrap 中以防止溢出
+          Wrap(
+            spacing: 4, // 按钮之间的间距
+            children: [
+              // 导出按钮
+              IconButton(
+                icon: const Icon(Icons.file_download_outlined,
+                    color: Colors.deepPurple),
+                onPressed: _exportPresets,
+                tooltip: '导出预设',
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(
+                  minWidth: 40,
+                  minHeight: 40,
+                ),
+              ),
+              // 导入按钮
+              IconButton(
+                icon: const Icon(Icons.file_upload_outlined,
+                    color: Colors.deepPurple),
+                onPressed: _importPresets,
+                tooltip: '导入预设',
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(
+                  minWidth: 40,
+                  minHeight: 40,
+                ),
+              ),
+              // 添加预设按钮
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline,
+                    color: Colors.deepPurple),
+                onPressed: _addNewPreset,
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(
+                  minWidth: 40,
+                  minHeight: 40,
+                ),
+              ),
+            ],
           ),
-          // 导入按钮
-          IconButton(
-            icon: const Icon(Icons.file_upload_outlined, color: Colors.deepPurple),
-            onPressed: () {
-              final input = html.FileUploadInputElement()..accept = '.json';
-              input.click();
-              input.onChange.listen((event) {
-                final file = input.files?.first;
-                if (file != null) {
-                  final reader = html.FileReader();
-                  reader.readAsText(file);
-                  reader.onLoad.listen((event) {
-                    try {
-                      final jsonString = reader.result as String;
-                      final List<dynamic> jsonList = json.decode(jsonString) as List;
-                      setState(() {
-                        _presets.clear();
-                        _presets.addAll(
-                          jsonList.map((item) => PresetItem.fromJson(item as Map<String, dynamic>)),
-                        );
-                      });
-                      _savePresets();
-                    } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('导入失败：无效的文件格式')),
-                      );
-                    }
-                  });
-                }
-              });
-            },
-            tooltip: '导入预设',
-          ),
-          // 添加预设按钮
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline, color: Colors.deepPurple),
-            onPressed: _addNewPreset,
-          ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4), // 右边距
         ],
       ),
       body: Stack(
@@ -302,7 +367,7 @@ class _PresetItemWidgetState extends State<PresetItemWidget> {
         .split(RegExp(r'[,，]'))
         .map((tag) => tag.trim())
         .where((tag) => tag.isNotEmpty)
-        .map((tag) => _processDanbooruTag(tag))  // 添加对d站标签的处理
+        .map((tag) => _processDanbooruTag(tag)) // 添加对d站标签的处理
         .toList();
 
     setState(() {
@@ -322,17 +387,15 @@ class _PresetItemWidgetState extends State<PresetItemWidget> {
     // 检查标签中是否同时包含下划线和括号
     bool hasUnderscore = tag.contains('_');
     bool hasParentheses = tag.contains('(') || tag.contains(')');
-    
+
     // 替换下划线为空格
     String processedTag = tag.replaceAll('_', ' ');
-    
+
     // 只有当标签同时包含下划线和括号时，才对括号进行转义
     if (hasUnderscore && hasParentheses) {
-      processedTag = processedTag
-          .replaceAll('(', r'\(')
-          .replaceAll(')', r'\)');
+      processedTag = processedTag.replaceAll('(', r'\(').replaceAll(')', r'\)');
     }
-    
+
     return processedTag.trim();
   }
 
@@ -406,30 +469,37 @@ class _PresetItemWidgetState extends State<PresetItemWidget> {
           // 标签显示区域
           if (_tags.isNotEmpty)
             Padding(
-              padding: EdgeInsets.fromLTRB(16, 0, 16, widget.preset.isEnabled ? 16 : 8),
+              padding: EdgeInsets.fromLTRB(
+                  16, 0, 16, widget.preset.isEnabled ? 16 : 8),
               child: Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: _tags.map((tag) => Chip(
-                  label: Text(
-                    tag,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                  deleteIcon: widget.preset.isEnabled ? null : const Icon(Icons.close, size: 18),
-                  onDeleted: widget.preset.isEnabled ? null : () {
-                    setState(() {
-                      _tags.remove(tag);
-                      widget.preset.tags = _tags;
-                      widget.onPresetChanged();
-                    });
-                  },
-                  backgroundColor: Colors.deepPurple.withOpacity(0.1),
-                  side: BorderSide.none,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                )).toList(),
+                children: _tags
+                    .map((tag) => Chip(
+                          label: Text(
+                            tag,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          deleteIcon: widget.preset.isEnabled
+                              ? null
+                              : const Icon(Icons.close, size: 18),
+                          onDeleted: widget.preset.isEnabled
+                              ? null
+                              : () {
+                                  setState(() {
+                                    _tags.remove(tag);
+                                    widget.preset.tags = _tags;
+                                    widget.onPresetChanged();
+                                  });
+                                },
+                          backgroundColor: Colors.deepPurple.withOpacity(0.1),
+                          side: BorderSide.none,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                        ))
+                    .toList(),
               ),
             ),
           // 输入框 - 只在非激活状态显示
@@ -469,7 +539,8 @@ class _PresetItemWidgetState extends State<PresetItemWidget> {
                   if (_tagController.text.isNotEmpty)
                     IconButton(
                       icon: const Icon(Icons.add_circle_outline),
-                      onPressed: () => _handleTextSubmitted(_tagController.text),
+                      onPressed: () =>
+                          _handleTextSubmitted(_tagController.text),
                       color: Colors.deepPurple,
                       iconSize: 20,
                       padding: EdgeInsets.zero,
@@ -492,4 +563,4 @@ class _PresetItemWidgetState extends State<PresetItemWidget> {
     _tagController.dispose();
     super.dispose();
   }
-} 
+}
